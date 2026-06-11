@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "id": "string",
+      "name": "string",
+      "category": "string",
+      "colors": ["string"],
+      "style_tags": ["string"]
+    }
+  ]
+}
