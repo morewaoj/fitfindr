@@ -6,7 +6,7 @@ FitFindr is a thrift-shopping AI agent that searches mock secondhand listings, c
 
 ## What This Project Demonstrates
 
-This project demonstrates a multi-tool agent with three required tools: listing search, outfit suggestion, and fit card creation. It also demonstrates a planning loop, session state management, graceful error handling, pytest tests, and a Gradio UI dependency/entry point. The current `app.py` file is still a placeholder, so the verified working interface right now is the Python agent and tests.
+This project demonstrates a multi-tool agent with three required tools: listing search, outfit suggestion, and fit card creation. It also demonstrates a planning loop, session state management, graceful error handling, pytest tests, and a Gradio UI in `app.py`.
 
 ## Tool Inventory
 
@@ -48,6 +48,8 @@ The agent returns one session dictionary with these fields:
 | `error` | A helpful error message when the workflow cannot continue. |
 | `steps` | A list of planning-loop steps completed by the agent. |
 
+State passes between tools in order: `search_results[0]` becomes `selected_item`, `selected_item` is passed into `suggest_outfit`, and `outfit_suggestion` is passed into `create_fit_card`.
+
 ## Error Handling Strategy
 
 No listings found: `search_listings` returns `[]`. `run_agent` stores a helpful error, records that it stopped early, and returns before outfit or fit card generation.
@@ -88,7 +90,7 @@ copy .env.example .env
 python app.py
 ```
 
-Current note: `app.py` is present as the Gradio entry point but does not yet launch a UI. To see the implemented agent workflow from the command line, run:
+To see the same agent workflow from the command line instead of the Gradio UI, run:
 
 ```bash
 python agent.py
