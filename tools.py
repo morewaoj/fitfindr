@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -11,6 +12,21 @@ from utils.data_loader import load_listings
 
 
 MODEL_NAME = "llama-3.3-70b-versatile"
+KNOWN_STYLES = [
+    "vintage",
+    "streetwear",
+    "y2k",
+    "casual",
+    "minimalist",
+    "workwear",
+    "oversized",
+    "grunge",
+    "skate",
+    "athletic",
+    "designer",
+    "retro"
+]
+KNOWN_SIZES = ["XS", "S", "M", "L", "XL", "XXL"]
 
 
 def _clean_words(text):
@@ -96,6 +112,173 @@ def _call_groq(prompt, temperature):
         return ""
     except Exception:
         return ""
+
+
+def _default_parsed_query(user_query):
+    return {
+        "description": user_query if isinstance(user_query, str) else "",
+        "size": None,
+        "max_price": None,
+        "style": None
+    }
+
+
+def _extract_json_object(text):
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    clean_text = text.strip()
+
+    if clean_text.startswith("```"):
+        clean_text = clean_text.replace("```json", "").replace("```", "").strip()
+
+    start = clean_text.find("{")
+    end = clean_text.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    try:
+        return json.loads(clean_text[start:end + 1])
+    except Exception:
+        return None
+
+
+def _validate_parsed_query(parsed, user_query):
+    if not isinstance(parsed, dict):
+        return _default_parsed_query(user_query)
+
+    description = parsed.get("description")
+    size = parsed.get("size")
+    max_price = parsed.get("max_price")
+    style = parsed.get("style")
+
+    if not isinstance(description, str) or not description.strip():
+        description = user_query if isinstance(user_query, str) else ""
+    else:
+        description = description.strip()
+
+    if isinstance(size, str):
+        size = size.strip().upper()
+        if size not in KNOWN_SIZES:
+            size = None
+    else:
+        size = None
+
+    try:
+        if max_price is not None:
+            max_price = float(max_price)
+    except Exception:
+        max_price = None
+
+    if isinstance(style, str):
+        style = style.strip().lower()
+        if style not in KNOWN_STYLES:
+            style = None
+    else:
+        style = None
+
+    return {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
+        "style": style
+    }
+
+
+def _remove_price_phrases(text):
+    patterns = [
+        r"\bunder\s+\$?\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?\b",
+        r"\bless than\s+\$?\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?\b",
+        r"\bbelow\s+\$?\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?\b",
+        r"\bmax(?:imum)?\s+(?:price\s+)?\$?\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?\b",
+        r"\bfor\s+under\s+\$?\d+(?:\.\d{1,2})?\s*(?:dollars?|bucks?)?\b",
+        r"\$\d+(?:\.\d{1,2})?"
+    ]
+
+    clean_text = text
+    for pattern in patterns:
+        clean_text = re.sub(pattern, " ", clean_text, flags=re.IGNORECASE)
+    return clean_text
+
+
+def _fallback_interpret_query(user_query):
+    parsed = _default_parsed_query(user_query)
+
+    if not isinstance(user_query, str) or not user_query.strip():
+        return parsed
+
+    text = user_query.strip()
+    lower_text = text.lower()
+
+    price_match = re.search(
+        r"(?:under|less than|below|max(?:imum)?|for under)\s+\$?(\d+(?:\.\d{1,2})?)",
+        lower_text
+    )
+    if price_match:
+        parsed["max_price"] = float(price_match.group(1))
+
+    size_match = re.search(r"\bsize\s+(xs|s|m|l|xl|xxl)\b", lower_text, flags=re.IGNORECASE)
+    if not size_match:
+        size_match = re.search(r"\b(xs|s|m|l|xl|xxl)\b", text, flags=re.IGNORECASE)
+    if size_match:
+        parsed["size"] = size_match.group(1).upper()
+
+    for style in KNOWN_STYLES:
+        if re.search(rf"\b{re.escape(style)}\b", lower_text):
+            parsed["style"] = style
+            break
+
+    description = lower_text
+    description = _remove_price_phrases(description)
+    description = re.sub(r"\bsize\s+(xs|s|m|l|xl|xxl)\b", " ", description, flags=re.IGNORECASE)
+    description = re.sub(r"\b(xs|s|m|l|xl|xxl)\b", " ", description, flags=re.IGNORECASE)
+
+    filler_words = [
+        "i", "want", "need", "find", "me", "a", "an", "the", "please", "looking",
+        "for", "show", "get", "to", "buy", "thrift", "thrifted", "item"
+    ]
+    words = [word for word in _clean_words(description) if word not in filler_words]
+
+    if words:
+        parsed["description"] = " ".join(words)
+
+    return _validate_parsed_query(parsed, user_query)
+
+
+def interpret_query(user_query):
+    """Interpret a natural-language thrift request into structured search parameters.
+
+    Returns a dictionary with description, size, max_price, and style. Groq is used
+    when a local GROQ_API_KEY is available; otherwise a deterministic fallback parser
+    extracts simple sizes, prices, and style words. This function never raises an
+    uncaught exception to the agent.
+    """
+    fallback = _fallback_interpret_query(user_query)
+
+    if not isinstance(user_query, str) or not user_query.strip():
+        return fallback
+
+    prompt = (
+        "Convert this thrift-shopping request into JSON only.\n"
+        "Return exactly these keys: description, size, max_price, style.\n"
+        "description should be the item search phrase without filler words, size, or price.\n"
+        f"size must be one of {KNOWN_SIZES} or null.\n"
+        "max_price must be a number or null.\n"
+        f"style must be one of {KNOWN_STYLES} or null.\n"
+        "Do not include markdown or explanations.\n"
+        f"User request: {user_query}"
+    )
+
+    try:
+        groq_result = _call_groq(prompt, temperature=0)
+        parsed = _extract_json_object(groq_result)
+        if parsed:
+            return _validate_parsed_query(parsed, user_query)
+    except Exception:
+        return fallback
+
+    return fallback
 
 
 def search_listings(description, size, max_price):

@@ -1,10 +1,11 @@
-from tools import create_fit_card, search_listings, suggest_outfit
+from tools import create_fit_card, interpret_query, search_listings, suggest_outfit
 from utils.data_loader import get_example_wardrobe
 
 
 def _new_session(user_query):
     return {
         "user_query": user_query,
+        "parsed_query": None,
         "search_results": [],
         "selected_item": None,
         "outfit_suggestion": None,
@@ -21,7 +22,23 @@ def run_agent(user_query, size=None, max_price=None, wardrobe=None):
     if wardrobe is None:
         wardrobe = {"items": []}
 
-    results = search_listings(user_query, size, max_price)
+    parsed = interpret_query(user_query)
+    session["parsed_query"] = parsed
+    session["steps"].append("Interpreted user query using planning tool.")
+
+    description = parsed["description"]
+
+    if size:
+        effective_size = size
+    else:
+        effective_size = parsed["size"]
+
+    if max_price is not None:
+        effective_max_price = max_price
+    else:
+        effective_max_price = parsed["max_price"]
+
+    results = search_listings(description, effective_size, effective_max_price)
     session["search_results"] = results
     session["steps"].append("Searched thrift listings.")
 

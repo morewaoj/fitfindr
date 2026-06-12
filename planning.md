@@ -17,6 +17,7 @@ Initial session state:
 ```python
 session = {
     "user_query": "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers.",
+    "parsed_query": None,
     "search_results": [],
     "selected_item": None,
     "outfit_suggestion": "",
@@ -26,12 +27,39 @@ session = {
 }
 ```
 
-Step 1: The planning loop receives the query and extracts simple search inputs.
+Step 1: The planning loop receives the query and calls `interpret_query`.
 
 ```python
-description = "vintage graphic tee"
-size = "M"
-max_price = 30.0
+interpret_query(
+    "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers."
+)
+```
+
+Sample successful output:
+
+```python
+{
+    "description": "vintage graphic tee",
+    "size": "M",
+    "max_price": 30.0,
+    "style": "vintage"
+}
+```
+
+State update:
+
+```python
+session["parsed_query"] = parsed_query
+session["steps"].append("Received user query.")
+session["steps"].append("Interpreted user query using planning tool.")
+```
+
+Step 2: The planning loop prepares search inputs from the parsed query.
+
+```python
+description = parsed_query["description"]
+size = parsed_query["size"]
+max_price = parsed_query["max_price"]
 wardrobe = {
     "items": [
         {
@@ -52,14 +80,7 @@ wardrobe = {
 }
 ```
 
-State update:
-
-```python
-session["steps"].append("Received user query.")
-session["steps"].append("Extracted description, size, max_price, and wardrobe.")
-```
-
-Step 2: The planning loop calls `search_listings`.
+Step 3: The planning loop calls `search_listings`.
 
 ```python
 search_listings(
@@ -98,7 +119,7 @@ session["steps"].append("Found matching thrift listings.")
 session["steps"].append("Selected the first matching item.")
 ```
 
-Step 3: Since results exist, the planning loop calls `suggest_outfit`.
+Step 4: Since results exist, the planning loop calls `suggest_outfit`.
 
 ```python
 suggest_outfit(
@@ -132,7 +153,7 @@ session["outfit_suggestion"] = outfit_suggestion
 session["steps"].append("Created an outfit suggestion using the selected item and wardrobe.")
 ```
 
-Step 4: The planning loop calls `create_fit_card`.
+Step 5: The planning loop calls `create_fit_card`.
 
 ```python
 create_fit_card(
@@ -189,6 +210,41 @@ Why it works: This thrift find fits the budget, matches the requested size, and 
 ```
 
 ## Tool Specifications
+
+### interpret_query(user_query: str) -> dict
+
+Purpose: Interpret the user's natural-language thrift request before search and convert it into structured search parameters.
+
+Inputs:
+
+- `user_query`: The original user request, such as `"I need a y2k jacket under 50 bucks"`.
+
+Output:
+
+```python
+{
+    "description": str,
+    "size": str | None,
+    "max_price": float | None,
+    "style": str | None
+}
+```
+
+Success behavior:
+
+- Use Groq `llama-3.3-70b-versatile` when `GROQ_API_KEY` exists.
+- Return a validated dictionary with exactly `description`, `size`, `max_price`, and `style`.
+- Extract size when the user says something like `"size L"`.
+- Extract max price when the user says something like `"under 30 dollars"` or `"under 50 bucks"`.
+- Extract a known style such as `vintage`, `y2k`, or `workwear`.
+
+Failure behavior:
+
+- If Groq is unavailable, use a deterministic fallback parser.
+- If parsing fails, return the original query as `description` and `None` for `size`, `max_price`, and `style`.
+- Do not raise an uncaught exception to the agent.
+
+`interpret_query` is an enhancement planning/query interpretation tool. The required project tools remain `search_listings`, `suggest_outfit`, and `create_fit_card`.
 
 ### search_listings(description: str, size: str | None, max_price: float | None) -> list[dict]
 
@@ -274,23 +330,28 @@ Failure behavior:
 Exact conditional logic:
 
 1. Receive the user query.
-2. Extract `description`, `size`, `max_price`, and wardrobe information.
-3. Save the original query in `session["user_query"]`.
-4. Add `"Received user query."` to `session["steps"]`.
-5. Call `search_listings(description, size, max_price)`.
-6. If the search results list is empty, set `session["error"] = "No matching listings found."`.
-7. If the search results list is empty, add `"Stopped because search returned no results."` to `session["steps"]`.
-8. If the search results list is empty, return the session immediately.
-9. If results exist, set `session["search_results"] = search_results`.
-10. If results exist, set `session["selected_item"] = search_results[0]`.
-11. If results exist, add `"Selected the first matching listing."` to `session["steps"]`.
-12. Call `suggest_outfit(session["selected_item"], wardrobe)`.
-13. Store the result in `session["outfit_suggestion"]`.
-14. Add `"Created outfit suggestion."` to `session["steps"]`.
-15. Call `create_fit_card(session["outfit_suggestion"], session["selected_item"])`.
-16. Store the result in `session["fit_card"]`.
-17. Add `"Created fit card."` to `session["steps"]`.
-18. Return the session.
+2. Save the original query in `session["user_query"]`.
+3. Add `"Received user query."` to `session["steps"]`.
+4. Call `interpret_query(user_query)`.
+5. Store the result in `session["parsed_query"]`.
+6. Add `"Interpreted user query using planning tool."` to `session["steps"]`.
+7. Set `description = parsed_query["description"]`.
+8. Set `effective_size` to the explicit `size` argument if provided, otherwise `parsed_query["size"]`.
+9. Set `effective_max_price` to the explicit `max_price` argument if provided, otherwise `parsed_query["max_price"]`.
+10. Call `search_listings(description, effective_size, effective_max_price)`.
+11. If the search results list is empty, set `session["error"] = "No matching listings found."`.
+12. If the search results list is empty, add `"Stopped because search returned no results."` to `session["steps"]`.
+13. If the search results list is empty, return the session immediately.
+14. If results exist, set `session["search_results"] = search_results`.
+15. If results exist, set `session["selected_item"] = search_results[0]`.
+16. If results exist, add `"Selected the first matching listing."` to `session["steps"]`.
+17. Call `suggest_outfit(session["selected_item"], wardrobe)`.
+18. Store the result in `session["outfit_suggestion"]`.
+19. Add `"Created outfit suggestion."` to `session["steps"]`.
+20. Call `create_fit_card(session["outfit_suggestion"], session["selected_item"])`.
+21. Store the result in `session["fit_card"]`.
+22. Add `"Created fit card."` to `session["steps"]`.
+23. Return the session.
 
 Later tools must not run if search fails. If `search_listings` returns an empty list, the agent must not call `suggest_outfit` and must not call `create_fit_card`.
 
@@ -301,10 +362,11 @@ The agent manages session state with one dictionary.
 ```python
 session = {
     "user_query": "",
+    "parsed_query": None,
     "search_results": [],
     "selected_item": None,
-    "outfit_suggestion": "",
-    "fit_card": "",
+    "outfit_suggestion": None,
+    "fit_card": None,
     "error": "",
     "steps": []
 }
@@ -313,6 +375,7 @@ session = {
 State fields:
 
 - `user_query`: The original user request.
+- `parsed_query`: The dictionary returned by `interpret_query`, including `description`, `size`, `max_price`, and `style`.
 - `search_results`: A list of listings returned by `search_listings`.
 - `selected_item`: The listing chosen for styling. The first matching result will be used in the basic implementation.
 - `outfit_suggestion`: The text returned by `suggest_outfit`.
@@ -329,7 +392,13 @@ User query
 Planning loop
     |
     v
-search_listings(description, size, max_price)
+interpret_query(user_query)
+    |
+    v
+Set session["parsed_query"]
+    |
+    v
+search_listings(description, effective_size, effective_max_price)
     |
     +--> No results or search error
     |       |
@@ -367,6 +436,8 @@ search_listings(description, size, max_price)
 
 | Tool | Failure Mode | Agent Response | Continue or Stop |
 | --- | --- | --- | --- |
+| `interpret_query` | Groq unavailable or parsing fails | Use deterministic fallback with original query as `description` and `None` for missing fields. | Continue |
+| `interpret_query` | Invalid parsed fields | Validate output, normalize size/style, and replace invalid values with safe defaults. | Continue |
 | `search_listings` | No listings found | Set `session["error"] = "No matching listings found."` and add a stop message to `session["steps"]`. | Stop |
 | `search_listings` | Listing data file cannot be loaded | Return an empty list, set `session["error"] = "No matching listings found."`, and stop early. | Stop |
 | `search_listings` | Listing is missing fields | Skip the broken listing and keep checking other listings. | Continue |
@@ -410,21 +481,48 @@ The agent creates a new session:
 ```python
 session = {
     "user_query": "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers.",
+    "parsed_query": None,
     "search_results": [],
     "selected_item": None,
-    "outfit_suggestion": "",
-    "fit_card": "",
+    "outfit_suggestion": None,
+    "fit_card": None,
     "error": "",
     "steps": ["Received user query."]
 }
 ```
 
-The agent prepares tool inputs:
+Tool call 1:
 
 ```python
-description = "vintage graphic tee"
-size = "M"
-max_price = 30.0
+parsed_query = interpret_query(
+    "I'm looking for a vintage graphic tee under $30, size M. I mostly wear baggy jeans and chunky sneakers."
+)
+```
+
+Tool 1 output:
+
+```python
+{
+    "description": "vintage graphic tee",
+    "size": "M",
+    "max_price": 30.0,
+    "style": "vintage"
+}
+```
+
+State update:
+
+```python
+session["parsed_query"] = parsed_query
+session["steps"].append("Interpreted user query using planning tool.")
+```
+
+The agent prepares search inputs:
+
+```python
+description = parsed_query["description"]
+size = parsed_query["size"]
+max_price = parsed_query["max_price"]
 wardrobe = {
     "items": [
         {
@@ -445,13 +543,13 @@ wardrobe = {
 }
 ```
 
-Tool call 1:
+Tool call 2:
 
 ```python
 search_results = search_listings("vintage graphic tee", "M", 30.0)
 ```
 
-Tool 1 output:
+Tool 2 output:
 
 ```python
 [
